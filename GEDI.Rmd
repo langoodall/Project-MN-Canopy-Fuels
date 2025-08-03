@@ -1,0 +1,1414 @@
+---
+title: "GEDI"
+author: "Louis Goodall"
+date: "2025-05-27"
+output: pdf_document
+---
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(terra)
+library(sf)
+library(rGEDI)
+library(lidR)
+library(pbmcapply)
+library(gstat)
+library(educate)
+library(minpack.lm)
+library(lubridate)
+library(exactextractr)
+library(ellipse)
+BWCA.shp <- st_read("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Shapefiles/BWCA/boundary_waters_canoe_area_wilderness.shp") %>%
+  st_transform(., crs = "epsg:4326")
+fortypcdBWCA_UTM <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/TreeMap/fortypcdBWCA.tif") %>%
+  project(., "epsg:26915", method = "near", res = c(30,30))
+options(scipen = 999)
+
+```
+
+# GEDI 1B
+
+```{r}
+# For loop to process all the GEDI_1B waveforms as a sf dataframe and then bind into
+# one large sfdf. Write out as a shapefile. Saves SO much data
+directory1B <- "/Volumes/Crucial X6/GEDI/GEDI 1B"
+gediFiles <- list.files(path = directory1B)
+gedi1BList <- list()
+
+for (i in seq_along(gediFiles)) {
+  gedi1B <- readLevel1B(level1Bpath = file.path(directory1B, gediFiles[i]))
+  gedi1B <- getLevel1BGeo(level1b = gedi1B, select = c("elevation_bin0"))
+  gedi1B$shot_number <- as.character(gedi1B$shot_number)
+  gedi1B$ID <- gediFiles[i]
+  dateTimeCode <- regmatches(gedi1B$ID, regexpr("20\\d{11}", gedi1B$ID))
+  year <- substr(dateTimeCode, 1, 4)
+  doy <- substr(dateTimeCode, 5, 7)
+  gedi1B$Date <- as.Date(as.integer(doy) - 1, origin = paste0(year, "-01-01"))
+  gedi1B <- gedi1B %>% select(-ID)
+  # gedi1B <- st_as_sf(gedi1B, coords = c("longitude_bin0", "latitude_bin0"), crs = "epsg:4326")
+  gedi1BList[[i]] <- gedi1B
+}
+
+gedi1BAll <- do.call(rbind, gedi1BList)
+
+# st_write(gedi1BAll,
+#          dsn = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Shapefiles/BWCA/GEDI1B/gedi1BAll.shp")
+```
+
+# GEDI 2A
+
+```{r}
+directory2A <- '/Volumes/Crucial X6/GEDI/GEDI 2A'
+gediFiles <- list.files(path = directory2A)
+gedi2AList <- list()
+
+for (i in seq_along(gediFiles)) {
+  gedi2A <- readLevel2A(level2Apath = file.path(directory2A, gediFiles[i]))
+  gedi2A <- getLevel2AM(level2a = gedi2A)
+  gedi2A$shot_number <- as.character(gedi2A$shot_number)
+  gedi2A$ID <- gediFiles[i]
+  dateTimeCode <- regmatches(gedi2A$ID, regexpr("20\\d{11}", gedi2A$ID))
+  year <- substr(dateTimeCode, 1, 4)
+  doy <- substr(dateTimeCode, 5, 7)
+  gedi2A$Date <- as.Date(as.integer(doy) - 1, origin = paste0(year, "-01-01"))
+  gedi2A <- gedi2A %>% select(-ID)
+  # gedi2A <- st_as_sf(gedi2A, coords = c("lon_lowestmode", "lat_lowestmode"), crs = "epsg:4326")
+  gedi2AList[[i]] <- gedi2A
+}
+
+gedi2AAll <- do.call(rbind, gedi2AList)
+gedi2AAll <- gedi2AAll %>% filter(quality_flag == 1)
+
+# st_write(gedi2AAll,
+#          dsn = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Shapefiles/BWCA/GEDI2A/gedi2AAll.shp")
+```
+
+# GEDI 2B
+
+```{r}
+directory2B <- '/Volumes/Crucial X6/GEDI/GEDI 2B'
+gediFiles <- list.files(path = directory2B)
+gedi2BList <- list()
+
+dropList <- c("GEDI02_B_2022089212114_O18672_02_T00721_02_003_01_V002_subsetted.h5",
+              "GEDI02_B_2022146024621_O19544_03_T10057_02_003_01_V002_subsetted.h5",
+              "GEDI02_B_2022158180539_O19740_02_T04990_02_003_01_V002_subsetted.h5",
+              "GEDI02_B_2022173153335_O19971_03_T09965_02_003_02_V002_subsetted.h5",
+              "GEDI02_B_2022193042801_O20274_02_T02144_02_003_02_V002_subsetted.h5",
+              "GEDI02_B_2022219175619_O20686_02_T10682_02_003_01_V002_subsetted.h5",
+              "GEDI02_B_2022292124902_O21815_02_T02052_02_003_01_V002_subsetted.h5",
+              "GEDI02_B_2024139003534_O30756_02_T10284_02_004_01_V002_subsetted.h5",
+              "GEDI02_B_2024170155920_O31247_03_T02942_02_004_01_V002_subsetted.h5",
+              "GEDI02_B_2024217174101_O31977_02_T04990_02_004_02_V002_subsetted.h5",
+              "GEDI02_B_2024235141708_O32254_03_T07211_02_004_02_V002_subsetted.h5",
+              "GEDI02_B_2024290161126_O33108_03_T04273_02_004_01_V002_subsetted.h5")
+
+for (i in seq_along(gediFiles)) {
+  fileName <- gediFiles[i]
+  if (fileName %in% dropList) {
+    next
+  }
+  gedi2B <- readLevel2B(level2Bpath = file.path(directory2B, gediFiles[i]))
+  gedi2B_PAI <- getLevel2BPAIProfile(level2b = gedi2B)
+  gedi2B_PAI$shot_number <- as.character(gedi2B_PAI$shot_number)
+  gedi2B_PAI$ID <- gediFiles[i]
+  dateTimeCode <- regmatches(gedi2B_PAI$ID, regexpr("20\\d{11}", gedi2B_PAI$ID))
+  year <- substr(dateTimeCode, 1, 4)
+  doy <- substr(dateTimeCode, 5, 7)
+  gedi2B_PAI$Date <- as.Date(as.integer(doy) - 1, origin = paste0(year, "-01-01"))
+  gedi2B_PAI <- gedi2B_PAI %>% select(-ID)
+  gedi2B_PAVD <- getLevel2BPAVDProfile(level2b = gedi2B)
+  gedi2B_PAVD$shot_number <- as.character(gedi2B_PAVD$shot_number)
+  gedi2B_PAVD$ID <- gediFiles[i]
+  dateTimeCode <- regmatches(gedi2B_PAVD$ID, regexpr("20\\d{11}", gedi2B_PAVD$ID))
+  year <- substr(dateTimeCode, 1, 4)
+  doy <- substr(dateTimeCode, 5, 7)
+  gedi2B_PAVD$Date <- as.Date(as.integer(doy) - 1, origin = paste0(year, "-01-01"))
+  gedi2B_PAVD <- gedi2B_PAVD %>% select(-ID)
+  gedi2B_BVPM <- getLevel2BVPM(level2b = gedi2B)
+  gedi2B_BVPM$shot_number <- as.character(gedi2B_BVPM$shot_number)
+  gedi2B_BVPM$ID <- gediFiles[i]
+  dateTimeCode <- regmatches(gedi2B_BVPM$ID, regexpr("20\\d{11}", gedi2B_BVPM$ID))
+  year <- substr(dateTimeCode, 1, 4)
+  doy <- substr(dateTimeCode, 5, 7)
+  gedi2B_BVPM$Date <- as.Date(as.integer(doy) - 1, origin = paste0(year, "-01-01"))
+  gedi2B_BVPM <- gedi2B_BVPM %>% select(-ID)
+  gedi2B <- inner_join(gedi2B_PAI, gedi2B_PAVD, by = c("shot_number", "beam", "algorithmrun_flag",
+                                                       "l2b_quality_flag", "delta_time", "lat_lowestmode",
+                                                       "lon_lowestmode", "elev_highestreturn", "elev_lowestmode",
+                                                       "height_lastbin", "height_bin0"))
+  gedi2B <- inner_join(gedi2B, gedi2B_BVPM, by = c("shot_number", "algorithmrun_flag", "l2b_quality_flag", "delta_time",
+                                         "elev_highestreturn", "elev_lowestmode"))
+  gedi2BList[[i]] <- gedi2B
+}
+
+
+gedi2BAll <- do.call(rbind, gedi2BList)
+gedi2BAll <- gedi2BAll %>% filter(l2b_quality_flag == 1)
+
+
+```
+
+# Data wrangling
+
+```{r}
+# Combine all the data into one big GEDI dataframe
+gediAll <- inner_join(gedi1BAll, gedi2AAll, by = c("shot_number", "Date"))
+gediAll <- inner_join(gediAll, gedi2BAll, by = c("shot_number", "delta_time", "sensitivity", "solar_elevation", "lat_lowestmode", "lon_lowestmode", "elev_highestreturn", "elev_lowestmode", "Date"))
+
+# Clean up the dataframe a bit
+gediAll <- gediAll %>%
+  select(-beam.y, -beam.x, -latitude_lastbin.y, -latitude_bin0.y,
+         -longitude_bin0.y, -longitude_lastbin.y, -rh100.y,
+         -Date.x, -Date.y) %>%
+  rename("latitude_bin0" = "latitude_bin0.x",
+         "latitude_lastbin" = "latitude_lastbin.x",
+         "longitude_bin0" = "longitude_bin0.x",
+         "longitude_lastbin" = "longitude_lastbin.x",
+         "rh100" = "rh100.x")
+
+# write_csv(gediAll, "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/GEDI_ALL/gediAll.csv")
+
+gediAll <- read_csv("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/GEDI_ALL/gediAll.csv")
+
+# Turn into an sf object
+gediAll_sf <- st_as_sf(gediAll, coords = c("longitude_lastbin", "latitude_lastbin"), crs = "epsg:4326")
+```
+
+# What files to download?
+
+```{r}
+# Read in the list of the LAZ files. There are so many and the data allocation to download
+# and read all of them in would be too much, so I will try and find if any of our GEDI locations
+# fall within the 1km grid cell that each of them represent. Once I have that figured out I can
+# then calculate tree metrics
+lazFiles <- data.table::fread('/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/LAZ files.txt')
+
+# Function to get easting and northing from the LAZ file names
+parse_tile_coords <- function(tile_name) {
+  tile_id <- str_extract(tile_name, "15[A-Z]{3}[0-9]{6}")
+  zone <- as.numeric(str_sub(tile_id, 1, 2))
+  mgrs <- str_sub(tile_id, 3, 5)
+  east <- as.numeric(str_sub(tile_id, 6, 8)) * 1000
+  north <- as.numeric(str_sub(tile_id, 9, 11)) * 1000 + 5000000
+  data.frame(zone = zone, mgrs = mgrs, easting = east, northing = north)
+}
+
+# Bind together
+tile_meta <- do.call(rbind, lapply(lazFiles$Files, parse_tile_coords)) %>% drop_na()
+
+# Function to create square polygons
+make_tile <- function(easting, northing, size = 1000) {
+  st_polygon(list(rbind(
+    c(easting, northing),
+    c(easting + size, northing),
+    c(easting + size, northing + size),
+    c(easting, northing + size),
+    c(easting, northing)
+  )))
+}
+
+# Apply to all elements and then convert to epsg 4326
+tiles_polys <- mapply(make_tile, tile_meta$easting, tile_meta$northing, SIMPLIFY = FALSE)
+tiles_sf <- st_sfc(tiles_polys, crs = 26915)
+tiles_sf <- st_as_sf(tiles_sf)
+tiles_sf$mgrs <- tile_meta$mgrs
+tiles_sf$n <- 1:nrow(tiles_sf)
+tiles_sfGedi <- st_transform(tiles_sf, crs = "epsg:4326")
+
+# Plot for visual check (optional)
+ggplot() +
+  geom_sf(data = tiles_sfGedi, fill = NA, color = "black") +
+  geom_sf(data = BWCA.shp[3], fill = NA, color = "red") +
+  theme_minimal()
+
+# Clip the tiles to the BWCA shapefile and then decipher which GEDI location fall in which grid cells
+tilesBWCA <- st_intersection(tiles_sfGedi, BWCA.shp)
+tilesBWCA <- st_as_sf(tilesBWCA, crs = "epsg:4326") %>%
+  mutate(tileID = n)
+# Transform intersected tiles back to UTM
+tilesBWCA_UTM <- st_transform(tilesBWCA, crs = "epsg:26915")
+
+# Extract xmin/ymin and carry tileID + mgrs
+n <- nrow(tilesBWCA_UTM)
+xmin_vals <- numeric(n)
+ymin_vals <- numeric(n)
+tileID_vals <- numeric(n)
+mgrs_vals <- character(n)
+
+for (i in 1:n) {
+  bbox <- st_bbox(tilesBWCA_UTM[i, ])
+  xmin_vals[i] <- bbox["xmin"]
+  ymin_vals[i] <- bbox["ymin"]
+  tileID_vals[i] <- tilesBWCA_UTM$tileID[i]
+  mgrs_vals[i] <- tilesBWCA_UTM$mgrs[i]
+}
+
+# Final output data frame
+coordsDf <- data.frame(
+  tileID = tileID_vals,
+  xmin = as.integer(xmin_vals) / 1000,
+  ymin = (ymin_vals - 5000000) / 1000,
+  mgrs = mgrs_vals,
+  stringsAsFactors = FALSE
+)
+
+coordsDf <- coordsDf %>% mutate(xmin = round(xmin), ymin = round(ymin))
+coordsDf <- coordsDf %>% mutate(code = paste0(mgrs, xmin, ymin))
+
+# Now that we have the tiles/coordinates that we need, we can start filtering the original
+# LAZ files to figure out which ones we need to download
+# Mark dummy = 1 if the coordsDf$code is in laz_codes to test if they are in
+coordsDf$dummy <- ifelse(coordsDf$code %in% lazCodes, 1, 0)
+coordsDf <- coordsDf %>% filter(dummy == 1)
+
+# Filter for the final LAZ files
+lazFilesFinal <- lazFiles[map_lgl(lazFiles$Files, function(file) {
+  any(str_detect(file, fixed(coordsDf$code)))
+}), ]
+
+
+# write_csv(lazFilesFinal,
+#           file = "/Users/louisgoodall/Desktop/lazFilesFinal.csv")
+
+
+#######################
+gediAll_UTM <- st_transform(gediAll_sf, crs = "epsg:26915")
+
+gediAll_joined <- st_join(gediAll_UTM, tilesBWCA_UTM[, c("tileID", "mgrs")], left = FALSE)
+
+gediAll_joined <- gediAll_joined %>%
+  mutate(xmin = floor(st_coordinates(.)[, 1] / 1000),
+         ymin = floor((st_coordinates(.)[, 2] - 5000000) / 1000),
+         code = paste0(mgrs, xmin, ymin))
+
+gediAll_joined <- gediAll_joined %>% mutate(code = trimws(code))
+
+gediMatched <- gediAll_joined %>% filter(code %in% coordsDf$code)
+
+
+gediMatched <- gediMatched %>%
+  filter(degrade_flag == 0,
+         Date > "2023-12-31") %>%
+  group_by(code) %>%
+  arrange(code, shot_number) %>%
+  mutate(shot_order = row_number(),
+         uniqueID = paste0("uID_",code,"_",shot_order))
+
+# gediMatched <- gediMatched %>%
+#   filter(Date > "2023-12-31",
+#          degrade_flag == 0) %>%
+#   group_by(code) %>%
+#   # select(shot_number, code) %>%
+#   arrange(code, shot_number) %>%
+#   mutate(shot_order = row_number(),
+#          uniqueID = paste0("uID_",code,"_",shot_order))
+
+st_write(gediMatched,
+         dsn = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Shapefiles/gediMatched.shp")
+```
+
+# Tree metrics
+
+```{r}
+# Read in and set analysis parameters of the lidar point clouds
+testLAS <- readLAScatalog("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Test_Data/", select = "xyzc")
+opt_chunk_size(testLAS) <- 100
+opt_chunk_buffer(testLAS) <- 15
+testLAS@data$code <- str_extract(testLAS@data$filename, "[A-Z]{3}[0-9]{6}")
+
+# Create a data frame of the rows that match the lidar point cloud locations by code
+testGEDI <- gediMatched %>% filter(code %in% unique(testLAS@data$code))
+source("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/lidarMetrics.R")
+gediCodes <- unique(testGEDI$code)
+matchedCodes <- testLAS@data$code[testLAS@data$code %in% gediCodes]
+setdiff(gediCodes, matchedCodes)
+testLAS <- testLAS[testLAS@data$code %in% gediCodes, ]
+class(testGEDI) <- c("sf", "data.frame")
+
+# Create folders for metricsDir, alsDir and FuelCalcDir
+metricsDir = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/Tree-Level Metrics"
+alsDir = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/LAZ"
+fcDir = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/FuelCalc"
+for (d in c(metricsDir, alsDir, fcDir)) if (!dir.exists(d)) dir.create(d, recursive = T)
+
+# Create the metrics and LAS files
+for (i in 1:nrow(testGEDI)) {
+  process_tlm2(i, gedi = testGEDI, .ctg = testLAS, alsdir = alsDir, mdir = metricsDir)
+}
+
+# Read in the metrics that have been created by the for loop above
+filesMetrics <- list.files(metricsDir, full.names = TRUE)
+filesALS <- list.files(alsDir, full.names = TRUE)
+idsMetrics <- parse_number(basename(filesMetrics))
+idsALS <- parse_number(basename(filesALS))
+identical(idsALS, idsMetrics)
+
+# Function to load spatial df, add uniqueID column and renames Zmax to Z
+read_with_id = function(path) {
+  # Extract the full ID like TXP624306_1
+  id = str_extract(basename(path), "(?<=uID_)[A-Za-z0-9_]+(?=\\.gpkg$)")
+  
+  m = st_read(path, quiet = TRUE)
+  m$uniqueID = id
+  
+  return(select(m, uniqueID, treeID, Z = Zmax, everything()))
+}
+
+# Get metrics and then find the forest types beneath them
+metrics <- map_dfr(filesMetrics, read_with_id) %>% `st_crs<-`("epsg:26915")
+fortypGEDI <- extract(fortypcdBWCA_UTM, metrics)
+metrics <- cbind(metrics, fortypGEDI) %>% rename("Species" = "Label")
+
+# Code to check where the individual trees fall within the selected landscapes
+# AFTER LOOKING I MAY HAVE TO ASSIGN NAs A PARTICULAR VALUE. TILE TXP624306 IS PARTLY IN THE 
+# PAGAMI CREEK FIRE AND FORTYPCDs ARE NOT AVAILABLE FOR THAT YET EVEN THOUGH THERE IS POTENTIAL
+# FUEL THERE
+for (code in gediCodes) {
+  gediSub <- metrics %>% filter(code == !!code)
+  tile <- testLAS[testLAS$code == code]
+  rasterCrop <- crop(fortypcdBWCA_UTM, ext(tile))
+  
+  raster_df <- as.data.frame(rasterCrop, xy = TRUE, na.rm = TRUE)
+  names(raster_df)[3] <- "value"
+  
+  points_df <- gediSub %>%
+    mutate(x = st_coordinates(.)[,1], y = st_coordinates(.)[,2]) %>%
+    st_drop_geometry()
+  
+  e <- ext(rasterCrop)
+  
+  p <- ggplot() +
+    geom_raster(data = raster_df, aes(x = x, y = y, fill = value)) +
+    geom_point(data = points_df, aes(x = x, y = y), color = "red", size = 1) +
+    # geom_text(data = points_df, aes(x = x, y = y, label = treeID), color = "black", size = 3, vjust = -1) +
+    coord_cartesian(xlim = c(e$xmin, e$xmax), ylim = c(e$ymin, e$ymax), expand = FALSE) +
+    scale_fill_viridis_d(option = "C", na.value = "transparent") +
+    theme_minimal() +
+    labs(title = paste("Tile:", code), x = "Easting", y = "Northing", fill = "Raster")
+  
+  print(p)
+}
+
+# Here I handle the missing species labels
+dominantSpp <- metrics %>%
+  st_drop_geometry() %>%
+  group_by(uniqueID) %>%
+  count(Species) %>%
+  summarise(Ndom = sum(n),
+            domSpec = Species[which.max(n)],
+            percDom = n[which.max(n)] / Ndom,
+            Nna = sum(is.na(Species)),
+            percNA = Nna/Ndom, .groups = "drop")
+
+
+metricsDf <- inner_join(metrics, select(dominantSpp, uniqueID, domSpec), by = "uniqueID") %>%
+  mutate(Species = case_when(is.na(Species) ~ domSpec, TRUE ~ Species)) %>%
+  filter(sum(is.na(Species)) == 0, .by = uniqueID)
+
+#----PREDICT DBH----#
+# Gotta build the models for predicting DBH. I will use the height (Z) of the trees to 
+# create models that express a hieght-diameter relationship
+spcds <- c(105, 125, 129, 12, 94, 97, 95, 71, 241, 129, 100, 802, 833, 823, 972, 316, 543, 920, 461, 317, 318, 951, 746, 375,741, 761)
+treeMN <- data.table::fread("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/MN_TREE.csv")
+treeMN <- treeMN %>% filter(SPCD %in% spcds, INVYR  == 2023) %>% mutate(DIA_CM = DIA * 2.54, HT_M = HT * 0.3048) %>%
+  mutate(Species = case_when(SPCD == 12 ~ "Balsam fir",SPCD == 71 ~ "Tamarack",SPCD == 94 ~ "White spruce",SPCD == 95 ~ "Black spruce",SPCD == 97 ~ "Red spruce",SPCD == 105 ~ "Jack pine",SPCD == 125 ~ "Red pine",SPCD == 129 ~ "Eastern white pine",SPCD == 241 ~ "Northern white-cedar",SPCD == 316 ~ "Red maple",SPCD == 317 ~ "Silver maple",SPCD == 318 ~ "Sugar maple",SPCD == 375 ~ "Paper birch",SPCD == 543 ~ "Black ash",SPCD == 741 ~ "Balsam poplar",SPCD == 746 ~ "Quaking aspen",SPCD == 802 ~ "White oak",SPCD == 823 ~ "Bur oak",SPCD == 833 ~ "Northern red oak",SPCD == 951 ~ "American basswood",TRUE ~ "American elm"))
+
+# Crate a function to fit Chapman-Richards growth model. I couldn't find any good height-diameter
+# relationships in the literature so I decided to estimate them using the nlsLM function.
+# Below is the function to run the model and then a for loop to look at the residuals of
+# each model.
+fitChapman <- function(df) {
+  tryCatch({
+    nlsLM(DIA_CM ~ a * (1 - exp(-b * HT_M))^c,
+          data = df,
+          start = list(a = 30, b = 0.02, c = 1),
+          control = nls.lm.control(maxiter = 1000))
+  }, error = function(e) {
+    # fallback to log-log linear
+    lm(log(DIA_CM) ~ log(HT_M), data = df)
+  })
+}
+
+fittedSpecies <- treeMN %>% group_by(Species) %>% group_map(~ fitChapman(.x), .keep = TRUE)
+species_names <- treeMN %>% group_by(Species) %>% group_keys() %>% pull(Species)
+
+# Residual plots to check the assumptions of the models I created. There are some assumptions
+# being violated here and models will need improvement, but for now they are close enough
+plot_list <- list()
+for (i in seq_along(species_names)) {
+  species <- species_names[i]
+  model <- fittedSpecies[[i]]
+  df <- treeMN %>% filter(Species == species) %>% select(DIA_CM, HT_M) %>% drop_na()
+  if ("nls" %in% class(model) || "nlsLM" %in% class(model)) {
+    coefs <- coef(model)
+    df$predictor <- coefs[1] * (1 - exp(-coefs[2] * df$HT_M))^coefs[3]
+    lm_model <- lm(DIA_CM ~ predictor, data = df)
+    aug <- broom::augment(lm_model)
+    p1 <- ggplot(data = aug, aes(x = .std.resid)) +
+      educate::stat_density_confidence(model = "normal") +
+      stat_density(geom = "line") +
+      theme_bw() +
+      xlab("Standardized residuals") +
+      ylab("Probability density") +
+      ggtitle(paste("Density: Residuals for", species))
+    p2 <- ggplot(aug, aes(x = .fitted, y = .std.resid)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(se = FALSE, color = "blue") +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+      xlab("Fitted Values") +
+      ylab("Standardized Residuals") +
+      theme_bw() +
+      ggtitle(paste("Residuals vs Fitted for", species))
+    plot_list[[species]] <- list(density_plot = p1, resid_plot = p2)
+  } else {
+    message(paste("Skipping", species, "- fallback model was used."))
+  }
+}
+
+# Because I am trying to assign species height-diameter curves to forest type code there is
+# sometimes a mismatch. So to circumvent this I will assign species as appropriately as possible
+# and for those that have more than one (e.g. Eastern white pine / northern red oak / white ash), 
+# I will assign one species randomly
+modelTable <- tibble(
+  species = species_names,
+  fitModel = fittedSpecies
+)
+
+uniqueMetricSpp <- unique(metricsDf$Species)
+modelSpp <- unique(modelTable$species)
+
+set.seed(33)
+speciesMap <- tibble(
+  metricsSpp = uniqueMetricSpp,
+  matchedModelSpp = map_chr(unique(metricsDf$Species), function(ms) {
+    components <- str_split(tolower(ms), " / |,| and | & ") %>% unlist() %>% str_trim()
+    matches <- modelSpp[map_lgl(tolower(modelSpp), function(mod) {
+      any(str_detect(mod, fixed(components)))
+    })]
+    if (length(matches) == 0) {
+      NA_character_
+    } else {
+      sample(matches, 1)
+    }
+  })
+)
+
+# Join with metricsDf and then run the calculation for DBH
+metricsDf <- metricsDf %>% left_join(speciesMap, by = c("Species" = "metricsSpp"))
+for (i in 1:nrow(modelTable)) {
+  S <- modelTable$species[i]
+  matchRows <- metricsDf$matchedModelSpp == S
+  
+  if (any(matchRows)) {
+    metricsDf$DBH[matchRows] <- predict(modelTable$fitModel[[i]],
+                                        metricsDf[matchRows, ] %>% select(Z)) %>%
+      round()
+  }
+}
+
+#----CROWN CLASS----#
+# Function to find crown class
+crcl <- function(Z) {
+  if (length(Z) == 1) {             # If only 1 value then D is assigned
+    return(c(cl = as.factor("D")))
+  } else {
+    m <- mean(Z, na.rm = TRUE)
+    s <- sd(Z, na.rm = TRUE)
+    up <- m + s
+    lo <- m - s
+    cut(Z, breaks = c(0, lo, up, 100), labels = c("S", "C", "D"))  # C is found from lo -- up
+  }
+}
+metricsDf$CrCl <- group_by(metricsDf, uniqueID) %>% group_map(~ crcl(.$Z)) %>% unlist()
+
+# Check for any trees that have unrealistic CBHs. If the CBH is too high up, or if
+# it is less than 2m. Any tree with an unralistic CBH is given the default value of 0.5
+unrealistic <- sum(metricsDf$CBH > metricsDf$Z * 0.9 | metricsDf$CBH < 2)
+unrealistic / nrow(metricsDf) # 36%
+sum(metricsDf$DBH < 7) / nrow(metricsDf) # 20%
+
+metricsDf <- metricsDf %>% mutate(CBH = ifelse(CBH > Z * 0.9 | CBH < 2, Z/2, CBH))
+
+#----CANOPY FUEL LOAD----#
+# First we need to get the canopy bulk density values into the metricsDf dataframe
+cbdRast <- rast('/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/LANDFIRE/cbdRast.tif')
+
+# Get the CBD values located beneath my gedi footprints and add to metricsDf
+cbdValues <- extract(cbdRast, metricsDf, ID = FALSE)
+metricsDf$CBD <- cbdValues[,1]
+metricsDf <- metricsDf %>%
+  mutate(CBD = as.character(CBD)) %>%
+  mutate(CBD = case_when(
+    CBD == "CBD = 1 kg/m^3 X 100" ~ 1 / 100,
+    CBD == "CBD = 3 kg/m^3 X 100" ~ 3 / 100,
+    CBD == "CBD = 4 kg/m^3 X 100" ~ 4 / 100,
+    CBD == "CBD = 5 kg/m^3 X 100" ~ 5 / 100,
+    CBD == "CBD = 6 kg/m^3 X 100" ~ 6 / 100,
+    CBD == "CBD = 8 kg/m^3 X 100" ~ 8 / 100,
+    CBD == "CBD = 9 kg/m^3 X 100" ~ 9 / 100,
+    CBD == "CBD = 11 kg/m^3 X 100" ~ 11 / 100,
+    CBD == "CBD = 12 kg/m^3 X 100" ~ 12 / 100,
+    CBD == "CBD = 16 kg/m^3 X 100" ~ 16 / 100,
+    CBD == "CBD = 17 kg/m^3 X 100" ~ 17 / 100,
+    CBD == "CBD = 22 kg/m^3 X 100" ~ 22 / 100,
+    CBD == "CBD = 24 kg/m^3 X 100" ~ 24 / 100,
+    CBD == "CBD = 30 kg/m^3 X 100" ~ 30 / 100,
+    CBD == "CBD = 31 kg/m^3 X 100" ~ 31 / 100,
+    CBD == "CBD = 34 kg/m^3 X 100" ~ 34 / 100,
+    CBD == "CBD = 35 kg/m^3 X 100" ~ 35 / 100,
+    TRUE ~ NA_real_ 
+  ))
+
+# Now we can calculate canopy fuel load by multiplying CBD and Canopy Volume / m2
+# CFL units are kg/m2
+metricsDf <- metricsDf %>% mutate(CFL = CBD * volume_per_m2)
+metricsDf <- st_as_sf(metricsDf)
+
+#----CANOPY COVER----#
+canopyCoverRast <- rast('/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/LANDFIRE/Canopy Cover/canopyCoverRast.tif')
+ccValues <- extract(canopyCoverRast, metricsDf, ID = FALSE)
+metricsDf$CCover <- ccValues[,1]
+
+# GEDI footprints and the raster cells beneath them
+for (code in gediCodes) {
+  gediSub <- metrics %>% filter(code == !!code)
+  tile <- testLAS[testLAS$code == code]
+  rasterCrop <- crop(fortypcdBWCA_UTM, ext(tile))
+  
+  raster_df <- as.data.frame(rasterCrop, xy = TRUE, na.rm = TRUE)
+  names(raster_df)[3] <- "value"
+  
+  points_df <- gediSub %>%
+    mutate(x = st_coordinates(.)[,1], y = st_coordinates(.)[,2]) %>%
+    st_drop_geometry()
+  
+  e <- ext(rasterCrop)
+  
+  p <- ggplot() +
+    geom_raster(data = raster_df, aes(x = x, y = y, fill = value)) +
+    geom_point(data = points_df, aes(x = x, y = y), color = "red", size = 1) +
+    # geom_text(data = points_df, aes(x = x, y = y, label = treeID), color = "black", size = 3, vjust = -1) +
+    coord_cartesian(xlim = c(e$xmin, e$xmax), ylim = c(e$ymin, e$ymax), expand = FALSE) +
+    scale_fill_viridis_d(option = "C", na.value = "transparent") +
+    theme_minimal() +
+    labs(title = paste("Tile:", code), x = "Easting", y = "Northing", fill = "Raster")
+  
+  print(p)
+}
+
+ggplot(metricsDf, aes(x = Z)) +
+  geom_histogram(binwidth = 1, fill = "dodgerblue", color = "black") +
+  labs(title = "Z", x = "m", y = "Count") +
+  theme_minimal()
+ggplot(metricsDf, aes(x = CBH)) +
+  geom_histogram(binwidth = 1, fill = "dodgerblue", color = "black") +
+  labs(title = "CBH", x = "m", y = "Count") +
+  theme_minimal()
+ggplot(metricsDf, aes(x = DBH)) +
+  geom_histogram(binwidth = 1, fill = "dodgerblue", color = "black") +
+  labs(title = "DBH", x = "m", y = "Count") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+source("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/modeling_helper_functions.R")
+directory <- '/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/Tree-Level Metrics'
+metricFiles <- list.files(directory, full.names = TRUE)
+
+gediList <- list()
+for (file in metricFiles) {
+  uid <- str_extract(basename(file), "(?<=).*(?=\\.gpkg)")
+  matchRow <- gediMatched %>% filter(uniqueID == uid)
+  uniqueID <- matchRow$uniqueID
+  date <- matchRow$Date
+  year <- year(date)
+  doy <- yday(date)
+  gediSf <- st_read(file) %>% st_set_crs(26915) %>% drop_na()
+  gediSf <- gediSf %>% mutate(uniqueID = uniqueID, date = date, year = year, doy = doy)
+  gediList[[file]] <- gediSf
+}
+
+gedi <- do.call(rbind, gediList)
+
+rownames(gedi) <- NULL
+
+
+metricsDf
+gediMatched
+
+inner_join(metricsDf, gediMatched, by = "uniqueID")
+
+inner_join(metricsDf, gediMatched %>%
+             st_drop_geometry() %>%
+             mutate(uniqueID = gsub("^uID_", "", uniqueID)),
+           by = "uniqueID") %>%
+  as.data.frame()
+
+
+
+x <- readRDS("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/LM_CBD_rf.rds")
+
+names(x$coefficients)
+
+
+gedi$species <- extract(fortypcdBWCA_UTM, gedi) %>% pull(2)
+
+gediVect <- buffer(vect(gedi), 12.5) %>% st_as_sf()
+gediVect$group <- cut(1:nrow(gediVect), 70) %>% as.numeric()
+fortypcdBWCA_UTM <- fortypcdBWCA_UTM %>% setNames("Species")
+fortypcdBWCA_UTM[is.nan(fortypcdBWCA_UTM$Species)] <- NA
+plot(as.factor(fortypcdBWCA_UTM), col = rainbow(11))
+
+fracCoverage <- exact_extract(fortypcdBWCA_UTM, gediVect, include_cols = "uniqueID", progress = TRUE)
+
+in_list <- make_even_groups(nrow(gedi), 4)   # groups for parallel processing
+ext_par <- pbmclapply(in_list, par_plot_frac, x = fracCoverage, mc.cores = 4)
+ext_par <- do.call(rbind, ext_par)  # aggregate to single dataframe
+gedi
+
+inner_join(gedi, ext_par, by = "uniqueID")%>% View()
+
+readRDS("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/rf_CBD.rds")
+
+
+gediMatched
+```
+
+# Initialize rGEE and GEE
+
+```{r}
+# Weird order I know but run this in it's entirety and it'll be fine
+library(reticulate)
+use_condaenv("rgee_py", conda = "/opt/anaconda3/bin/conda", required = TRUE)
+py_run_string("import ee ee.Initialize()")
+library(rgee)
+ee_Initialize(drive = TRUE, project = "ee-gis712-2024", gcs = FALSE)
+ee_clean_user_credentials()
+ee_Authenticate()
+library(reticulate)
+use_condaenv("rgee_py", conda = "/opt/anaconda3/bin/conda", required = TRUE)
+py_run_string("import ee ee.Initialize()")
+ee_Initialize(drive = TRUE, project = "ee-gis712-2024", gcs = FALSE)
+```
+
+# Earth Obervation Satellite Imagery download
+
+```{r}
+# Here I will download the satellite imagery that I will then use as the training data to
+# help predict the wildfire risk potential
+eeBWCA.shp <- sf_as_ee(BWCA.shp)
+startDate <- "2024-01-01"
+endDate <- "2024-12-31"
+
+#----SENTINEL 2----#
+# Band 1
+# Read in the Sentinel-2 surface reflectance image collection which contains all the 
+# images that we may want. Also ge the cloud band for masking purposes
+
+# Load Sentinel-2 Surface Reflectance and Cloud Probability collections
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B1")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+
+# Join SR and cloud collections by system:index
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+
+# Cloud masking function (you must define this based on your needs)
+# Example placeholder:
+maskClouds <- function(joined) {
+  sr <- ee$Image(joined$get("primary"))
+  cloud <- ee$Image(joined$get("secondary"))
+  cloudMask <- cloud$lt(10)  # Keep pixels with <10% cloud probability
+  return(sr$updateMask(cloudMask))
+}
+
+# Apply cloud masking
+sentinel2_band1_clean <- ee$ImageCollection(joinedCol$map(maskClouds))
+
+# Optional: Resample to 30m and reproject to UTM Zone 15N (EPSG:26915)
+resample30m <- function(image) {
+  image$reproject(crs = "EPSG:26915", scale = 30)
+}
+sentinel2_band1 <- sentinel2_band1_clean$map(resample30m)
+
+# Reduce across time to compute per-pixel percentiles (10th, 50th, 95th)
+percentiles <- sentinel2_band1_clean$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+
+# stats <- percentiles$select("B1_p50")$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+# print(stats)
+# stats <- percentiles$select("B1_p10")$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+# print(stats)
+# stats <- percentiles$select("B1_p95")$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+# print(stats)
+
+# Now you can use percentiles$select("B8A_p10"), "B8A_p50", or "B8A_p95" for display or export
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(percentiles$select("B1_p50"),
+             list(min = 0, max = 16615, palette = c("black", "orange", "red")),
+             "Sentinel-2 B8A - 50th Percentile")
+
+Map$addLayer(percentiles$select("B1_p10"),
+             list(min = 0, max = 16615, palette = c("black", "orange", "red")),
+             "Sentinel-2 B8A - 10th Percentile")
+
+Map$addLayer(percentiles$select("B1_p95"),
+             list(min = 0, max = 16615, palette = c("black", "orange", "red")),
+             "Sentinel-2 B8A - 95th Percentile")
+
+bandNames <- percentiles$bandNames()$getInfo()
+
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+
+# Band 2
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B2")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band2 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band2 <- sentinel2_band2$map(resample30m)
+percentiles <- sentinel2_band2$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 3
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B3")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band3 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band3 <- sentinel2_band3$map(resample30m)
+percentiles <- sentinel2_band3$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 4
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B4")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band4 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band4 <- sentinel2_band4$map(resample30m)
+percentiles <- sentinel2_band4$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 5
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B5")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band5 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band5 <- sentinel2_band5$map(resample30m)
+percentiles <- sentinel2_band5$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 6
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B6")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band6 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band6 <- sentinel2_band6$map(resample30m)
+percentiles <- sentinel2_band6$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 7
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B7")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band7 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band7 <- sentinel2_band7$map(resample30m)
+percentiles <- sentinel2_band7$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 8
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B8")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band8 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band8 <- sentinel2_band8$map(resample30m)
+percentiles <- sentinel2_band8$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 8A
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B8A")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band8A <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band8A <- sentinel2_band8A$map(resample30m)
+percentiles <- sentinel2_band8A$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 11
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B11")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band11 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band11 <- sentinel2_band11$map(resample30m)
+percentiles <- sentinel2_band11$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+# Band 12
+s2Collection <- ee$ImageCollection("COPERNICUS/S2_SR")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  select("B12")
+s2Clouds <- ee$ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")$
+  filterDate(startDate, endDate)
+joinFilter <- ee$Filter$equals(leftField = "system:index", rightField = "system:index")
+innerJoin <- ee$Join$inner()
+joinedCol <- innerJoin$apply(s2Collection, s2Clouds, joinFilter)
+sentinel2_band12 <- ee$ImageCollection(joinedCol$map(maskClouds))
+sentinel2_band12 <- sentinel2_band12$map(resample30m)
+percentiles <- sentinel2_band12$
+  reduce(ee$Reducer$percentile(c(10, 50, 95)))$
+  clip(eeBWCA.shp)$
+  reproject(crs = "EPSG:26915", scale = 30)
+bandNames <- percentiles$bandNames()$getInfo()
+for (band in bandNames) {
+    image <- percentiles$select(band)$
+    reproject(crs = "EPSG:26915", scale = 30)$
+    clip(eeBWCA.shp)
+    task <- ee_image_to_drive(image = image, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF"
+  )
+  cat("Starting export for:", band, "\n")
+  task$start()
+}
+
+#----SENTINEL 1 SAR----#
+# VH polarisation
+# Here I am downloading the Sentinel-1 SAR data for the BWCA. I will choose the ASCENDING
+# data because to use both ASCENDING and DESCENDING requires more processing. So, for now,
+# I will use one direction consistently
+s1VHCollection <- ee$ImageCollection("COPERNICUS/S1_GRD")$
+  filterDate(startDate, endDate)$
+  filterBounds(eeBWCA.shp)$
+  filter(ee$Filter$eq("instrumentMode", "IW"))$
+  filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VH"))$
+  select("VH")
+asc <- s1VHCollection$filter(ee$Filter$eq("orbitProperties_pass", "ASCENDING"))
+asc <- asc$median()$clip(eeBWCA.shp)
+
+stats <- asc$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 10, maxPixels = 1e13)$getInfo()
+print(stats)
+
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(eeBWCA.shp)
+Map$addLayer(asc, 
+             list(min = -72.90393, max = -8.012064, palette = c("black", "blue", "green", "yellow", "red")),
+             "Sentinel 1 - SAR (Ascending)")
+
+#----MODIS----#
+# Phenology Start of Season
+# Because we only need the one image of yearly phenology, we can do the cloud masking
+# a bit differently than previous cloud masking in this script. First let's make a
+# function that masks clouds in MODIS
+maskMODISClouds <- function(image) {
+  qa <- image$select("QA_Overall_1")
+  qualityMask <- qa$bitwiseAnd(3)$eq(0)   # Keep only the good cells
+  image$updateMask(qualityMask)
+}
+
+sosMODIS <- ee$ImageCollection("MODIS/061/MCD12Q2")$
+  filterDate("2023-01-01", "2023-12-31")$
+  filterBounds(eeBWCA.shp)$
+  map(maskMODISClouds)$
+  select("Greenup_1")
+sosImage <- sosMODIS$first()$clip(eeBWCA.shp)
+sosImage <- resample30mNN(sosImage)
+# stats <- sosImage$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+# print(stats)
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(eeBWCA.shp)
+Map$addLayer(sosImage,
+             list(min = 19380, max = 19507, palette = c("black", "blue", "green", "yellow", "red")),
+             "MODIS Phenology - Start of Season")
+
+
+task <- ee_image_to_drive(image = sosImage, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF")
+task$start()
+
+ee_monitoring(task)
+
+# Phenology End of Season
+sosMODIS <- ee$ImageCollection("MODIS/061/MCD12Q2")$
+  filterDate("2023-01-01", "2023-12-31")$
+  filterBounds(eeBWCA.shp)$
+  map(maskMODISClouds)$
+  select("Senescence_1")
+sosImage <- sosMODIS$first()$clip(eeBWCA.shp)
+sosImage <- resample30mNN(sosImage)
+stats <- sosImage$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+print(stats)
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(eeBWCA.shp)
+Map$addLayer(sosImage,
+             list(min = 19528, max = 19660, palette = c("black", "blue", "green", "yellow", "red")),
+             "MODIS Phenology - End of Season")
+
+task <- ee_image_to_drive(image = sosImage, description = paste0(band, "_export"), folder = "GEDI_BWCA", fileNamePrefix = band, region = eeBWCA.shp$geometry(), scale = 30, maxPixels = 1e13, fileFormat = "GeoTIFF")
+task$start()
+
+
+one <- rast('/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/Processed Rasters/drive-download-20250803T020042Z-1-001/B8_p10_2025_08_02_20_32_01.tif')
+two. - rast()
+
+plot(one)
+
+
+#----STATIC LANDSCAPE VARIABLES----#
+# Elevation
+srtmDEM <- ee$Image("USGS/SRTMGL1_003")$
+  clip(eeBWCA.shp)
+# stats <- srtmDEM$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+# print(stats)
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(eeBWCA.shp)
+Map$addLayer(srtmDEM,
+             list(min = 335, max = 700, palette = c("black", "blue", "green", "yellow", "red")),
+             "Elevation")
+
+# Slope
+slope <- ee$Terrain$slope(srtmDEM)
+stats <- slope$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+print(stats)
+
+# Aspect
+aspect <- ee$Terrain$aspect(srtmDEM)
+stats <- aspect$reduceRegion(reducer = ee$Reducer$minMax(), geometry = eeBWCA.shp, scale = 30, maxPixels = 1e13)$getInfo()
+print(stats)
+
+Map$centerObject(eeBWCA.shp)
+Map$addLayer(eeBWCA.shp)
+Map$addLayer(srtmDEM,
+             list(min = 335, max = 700, palette = c("black", "blue", "green", "yellow", "red")),
+             "Elevation")
+Map$addLayer(slope,
+             list(min = 0, max = 52.55262, palette = c("black", "blue", "green", "yellow", "red")),
+             "Slope")
+Map$addLayer(aspect,
+             list(min = 0, max = 358.2852, palette = c("black", "blue", "green", "yellow", "red")),
+             "Elevation")
+
+```
+
+# Other data needed
+
+```{r}
+#----TREEMAP----#
+# AGB DRYBIO_L
+biomassRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/TreeMap/BIOMASS/TreeMap2016_DRYBIO_L.tif")
+BWCA.shp_Clip <- st_transform(BWCA.shp_Clip, crs = crs(biomassRast))
+biomassRast <- crop(biomassRast, BWCA.shp_Clip) %>% mask(., BWCA.shp_Clip)
+biomassRast <- project(biomassRast, fortypcdBWCA_UTM, method = 'bilinear')
+plot(biomassRast)
+writeRaster(biomassRast,
+            filename = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/TreeMap/biomassBWCA.tif",
+            NAflag = 0,
+            overwrite = TRUE)
+
+biomassRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/TreeMap/biomassBWCA.tif")
+plot(biomassRast)
+
+#----MODIS----#
+# To calculate some of these MODIS values I will need to utilise several different data sources.
+# Below are 4 maps that come from the calibration of TRY plant trait data to MODIS images. Because
+# all of these come from a global raster, I will be cropping them to the BWCA and then writing them
+# back out as smaller sized raster files to save computation in the future.
+
+# Leaf Dry Matter Content
+# ldmcRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/LDMC_1km_v1.tif")
+# BWCA.shp_Clip <- st_transform(BWCA.shp_Clip, crs = crs(ldmcRast))
+# ldmcRast <- crop(ldmcRast, BWCA.shp_Clip) %>% mask(., BWCA.shp_Clip)
+# ldmcRast <- project(ldmcRast, fortypcdBWCA_UTM, method = 'bilinear')
+# writeRaster(ldmcRast,
+#             filename = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/ldmcRast.tif",
+#             NAflag = 0,
+#             overwrite = TRUE)
+ldmcRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/ldmcRast.tif")
+
+# Leaf Nitrogen Content
+# lncRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/LNC_1km_v1.tif")
+# lncRast <- crop(lncRast, BWCA.shp_Clip) %>% mask(., BWCA.shp_Clip)
+# lncRast <- project(lncRast, fortypcdBWCA_UTM, method = 'bilinear')
+# writeRaster(lncRast,
+#             filename = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/lncRast.tif",
+#             NAflag = 0,
+#             overwrite = TRUE)
+lncRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/lncRast.tif")
+
+# Leaf Phosphorus Content
+# lpcRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/LPC_1km_v1.tif")
+# lpcRast <- crop(lpcRast, BWCA.shp_Clip) %>% mask(., BWCA.shp_Clip)
+# lpcRast <- project(lpcRast, fortypcdBWCA_UTM, method = 'bilinear')
+# writeRaster(lpcRast,
+#             filename = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/lpcRast.tif",
+#             NAflag = 0,
+#             overwrite = TRUE)
+lpcRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/lpcRast.tif")
+
+# Specific Leaf Area
+# slaRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/SLA_1km_v1.tif")
+# slaRast <- crop(slaRast, BWCA.shp_Clip) %>% mask(., BWCA.shp_Clip)
+# slaRast <- project(slaRast, fortypcdBWCA_UTM, method = 'bilinear')
+# writeRaster(slaRast,
+#             filename = "/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/slaRast.tif",
+#             NAflag = 0,
+#             overwrite = TRUE)
+slaRast <- rast("/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/MODIS/slaRast.tif")
+
+plot(slaRast)
+
+
+#----RASTER CALCULATIONS----#
+directory <- '/Users/louisgoodall/Desktop/Portfolio_Projects/GEDI/Data/Processed Rasters'
+files <- list.files(directory, full.names = TRUE, pattern = "\\.tif")
+rasters <- list()
+for (file in files) {
+  filename <-  basename(file)
+  parts <- strsplit(filename, "_")[[1]]
+  shortName <- paste(parts[1:2], collapse = "_")
+  rasters[[shortName]] <- rast(file)
+}
+
+rasters$B8
+
+# NDVI (Normalized Vegetation Difference Index)
+ndvi <- (rasters$B8_p50 - rasters$B4_p50) / (rasters$B8_p50 + rasters$B4_p50)
+# EVI (Enhanced Vegetation Index: 1 & 2)
+evi <- 2.5 * (rasters$B8_p50 - rasters$B4_p50) / (2.5 * (rasters$B8_p50 + rasters$B4_p50))
+evi2 <- 2.5 * ((rasters$B8_p50 - rasters$B4_p50) / (rasters$B8_p50 + 2.4 * rasters$B4_p50 + 1))
+# RVI (Radar Vegetation Index)
+rvi <- rasters$B8_p50 / rasters$B4_p50
+# PSSRac (Pigment Specific Simple Ratio a)
+pssra <- rasters$B7_p50 / rasters$B4_p50
+# SAVI (Soil Adjusted Vegetation Index)
+savi <- ((rasters$B8_p50 - rasters$B4_p50) / (rasters$B8_p50 + rasters$B4_p50 + 0.428)) * (1 + 0.428)
+# GNDVI (Green Normalized Difference Vegetation Index)
+# Highly correlated with nitrogen, closer to 1 is more nitrogen
+gndvi <- (rasters$B8_p50 - rasters$B3_p50) / (rasters$B8_p50 + rasters$B3_p50)
+# NDWI (Normalized Diference Water Index)
+ndwi <- (rasters$B3_p50 - rasters$B8_p50) / (rasters$B3_p50 + rasters$B8_p50)
+
+
+
+
+plot(ndvi)
+plot(evi)
+plot(evi2)
+plot(rvi)
+plot(pssra)
+plot(savi)
+plot(gndvi)
+plot(ndwi)
+```
+
+
+
+```{r}
+fortypcdBWCA <- project(fortypcdBWCA_UTM, rasters$B1_p10, method = "near")
+
+fullStack <- c(rasters$B1_p50,
+  rasters$B2_p50,
+  rasters$B3_p50,
+  rasters$B4_p50,
+  rasters$B5_p50,
+  rasters$B6_p50,
+  rasters$B7_p50,
+  rasters$B8_p50,
+  rasters$B8A_p50,
+  rasters$B11_p50,
+  rasters$B12_p50,
+  rasters$B1_p10,
+  rasters$B2_p10,
+  rasters$B3_p10,
+  rasters$B4_p10,
+  rasters$B5_p10,
+  rasters$B6_p10,
+  rasters$B7_p10,
+  rasters$B8_p10,
+  rasters$B8A_p10,
+  rasters$B11_p10,
+  rasters$B12_p10,
+  rasters$B1_p95,
+  rasters$B2_p95,
+  rasters$B3_p95,
+  rasters$B4_p95,
+  rasters$B5_p95,
+  rasters$B6_p95,
+  rasters$B7_p95,
+  rasters$B8_p95,
+  rasters$B8A_p95,
+  rasters$B11_p95,
+  rasters$B12_p95,
+  fortypcdBWCA
+ # ndvi,
+ # evi,
+ # evi2,
+ # rvi,
+ # pssra,
+ # savi,
+ # gndvi,
+ # ndwi,
+ # ldmcRast,
+ # slaRast,
+ # lpcRast,
+ # lncRast
+ )
+
+
+
+plot(fullStack[[12]])
+
+gediMatched
+
+
+x <- extract(fullStack, gediMatched)
+
+x
+
+
+pcaOutput <- prcomp(as.matrix(x[,-c(1,35)]), scale = TRUE, center = TRUE)
+pcaDf <- as.data.frame(pcaOutput$x)
+pcaDf$groups <- x$Label
+centroids <- aggregate(cbind(PC1,PC2) ~ groups, pcaDf, mean)
+
+
+valid_groups <- unique(pcaDf$groups[sapply(split(pcaDf, pcaDf$groups), function(df) {
+  sum(complete.cases(df[, c("PC1", "PC2")])) >= 2
+})])
+
+# Generate ellipses
+library(ellipse)
+conf.rgn <- do.call(rbind, lapply(valid_groups, function(t) {
+  subdf <- pcaDf[pcaDf$groups == t, c("PC1", "PC2")]
+  if (nrow(subdf) < 2 || anyNA(subdf)) return(NULL)
+
+  centre_row <- centroids[centroids$groups == t, c("PC1", "PC2")]
+  if (nrow(centre_row) == 0 || anyNA(centre_row)) return(NULL)
+
+  ell <- ellipse::ellipse(cov(subdf), centre = as.matrix(centre_row), level = 0.95)
+  data.frame(groups = as.character(t), ell)
+}))
+
+
+# Plot PC1 and PC2
+ggplot(data = pcaDf, aes(x = PC1, y = PC2, group = as.factor(groups), color = as.factor(groups))) + 
+    # geom_polygon(data = conf.rgn, aes(fill = groups), alpha = 0.05) +
+    geom_point(size = 1, alpha = 0.1) + 
+  labs(title = "Principal Component Analysis of Scotland Tree Types: PC1 and PC2") +
+  theme_classic() +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.2) +
+  theme(legend.position = "none")
+
+
+```
+cutTable <- finalTable %>%
+  select(-x, -y)
+cutTable$`Aspect (º)` <- as.numeric(as.factor(cutTable$`Aspect (º)`))
+cutTable$Tree_Type <- as.numeric(as.factor(cutTable$Tree_Type))
+
+# Calculate PCA eigenvalues and the centroids of each group
+pcaOutput <- prcomp(as.matrix(cutTable[,-1]), scale = TRUE, center = TRUE)
+pcaDf <- as.data.frame(pcaOutput$x)
+pcaDf$groups <- finalTable$Tree_Type
+centroids <- aggregate(cbind(PC1,PC2) ~ groups, pcaDf, mean)
+
+# Calculate 95% confidence ellipsoids so we can plot these polygons over ggplot
+conf.rgn  <- do.call(rbind, lapply(unique(pcaDf$groups), function(t)
+  data.frame(groups = as.character(t),
+             ellipse(cov(pcaDf[pcaDf$groups == t, 1:2]),
+                   centre = as.matrix(centroids[centroids$groups == t, 2:3]),
+                   level = 0.95),
+             stringsAsFactors = FALSE)))
+
+# Plot PC1 and PC2
+ggplot(data = pcaDf, aes(x = PC1, y = PC2, group = as.factor(groups), color = as.factor(groups))) + 
+    geom_polygon(data = conf.rgn, aes(fill = groups), alpha = 0.05) +
+    geom_point(size = 1, alpha = 0.1) + 
+  labs(title = "Principal Component Analysis of Scotland Tree Types: PC1 and PC2") +
+  xlab("PC1 (Continentality Index, 35.59%)") +
+  ylab("PC2 (Max Temp (ºC), 24.36%)") +
+  theme_classic() +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.2)
+```
+
+
+
