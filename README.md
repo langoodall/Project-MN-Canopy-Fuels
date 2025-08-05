@@ -3,11 +3,10 @@
 This projects leverages GEDI (Global Ecosystem Dynamics Investigation) data and other remote sensing datasets to develop a high-resolution map of canopy fuel loads and wildfire susceptibility in the Boundary Waters Canoe Area Wilderness (BWCAW) of northern Minnesota.
 
 ### Project Status
-This project is currently in the 
+This project is currently processing the remotely sensed data. The final step in the project will be to use universal kriging to create a complete map of canopy fuels in the Boundary Waters.
 
-
-### Obhectives
-Acquire and process GEDI L2A data ✅<img width="468" height="16" alt="image" src="https://github.com/user-attachments/assets/451a5489-0738-41e6-80f8-f24dca2069fc" />
-
-
-
+### Objectives
+Acquire and process GEDI L2A data ✅
+Determine GEDI footrpint-level canopy fuel metrics ✅
+Integrate auxillary datasets via Google Earth Engine (LANDFIRE, Sentinel-1 / 2, MODIS) ✅
+Use kriging to create a wall to wall map of canopy fuels
