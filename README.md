@@ -1,3 +1,13 @@
 # Project-MN-Canopy-Fuels
-### Still a work in progress 
-Project to investigate the canopy fuels of the Boundary Waters Canoe Area in Minnesota. Using a mixture of GEDI plot data, LANDFIRE rasters and remotely sensed Sentinel-2 data (among others), I will use machine learning to ultimately create a map canopy fuel loads in the BWCA.
+### Overview
+This projects leverages GEDI (Global Ecosystem Dynamics Investigation) data and other remote sensing datasets to develop a high-resolution map of canopy fuel loads and wildfire susceptibility in the Boundary Waters Canoe Area Wilderness (BWCAW) of northern Minnesota.
+
+### Project Status
+This project is currently in the 
+
+
+### Obhectives
+Acquire and process GEDI L2A data ✅<img width="468" height="16" alt="image" src="https://github.com/user-attachments/assets/451a5489-0738-41e6-80f8-f24dca2069fc" />
+
+
+
