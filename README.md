@@ -1,4 +1,6 @@
 # Project-MN-Canopy-Fuels
+![](https://kstp.com/wp-content/uploads/2023/06/spice-lake-fire-us-forest-service-06-14-23.jpg)
+
 ### Overview
 This projects leverages GEDI (Global Ecosystem Dynamics Investigation) data and other remote sensing datasets to develop a high-resolution map of canopy fuel loads and wildfire susceptibility in the Boundary Waters Canoe Area Wilderness (BWCAW) of northern Minnesota.
 
