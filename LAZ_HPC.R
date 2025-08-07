@@ -59,7 +59,7 @@ metrics <- cbind(metrics, fortypGEDI) %>% rename("Species" = "Label")
 # Here I handle the missing species labels
 dominantSpp <- metrics %>%
   st_drop_geometry() %>%
-  goup_by(uniqueID) %>%
+  group_by(uniqueID) %>%
   count(Species) %>%
   summarise(Ndom = sum(n),
             domSpec = Species[which.max(n)],
@@ -199,5 +199,6 @@ metricsDf$CCover <- ccValues[,1]
 
 
 st_read(metricsDf, dsn = "/share/tcsi/lagoodal/GEDI/Outputs/metricsDf.shp")
+
 
 
