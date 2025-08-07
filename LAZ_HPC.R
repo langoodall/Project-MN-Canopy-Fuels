@@ -198,5 +198,6 @@ ccValues <- extract(canopyCoverRast, metricsDf, ID = FALSE)
 metricsDf$CCover <- ccValues[,1]
 
 
-write_csv(metricsDf, "/share/tcsi/lagoodal/GEDI/Outputs/metricsDf.csv")
+st_read(metricsDf, dsn = "/share/tcsi/lagoodal/GEDI/Outputs/metricsDf.shp")
+
 
