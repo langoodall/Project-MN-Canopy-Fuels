@@ -10,7 +10,7 @@ This project is currently processing the remotely sensed data. The final step in
 ### Objectives
 Acquire and process GEDI L2A data ✅
 
-Determine GEDI footrpint-level canopy fuel metrics ✅
+Determine GEDI footprint-level canopy fuel metrics 
 
 Integrate auxillary datasets via Google Earth Engine (LANDFIRE, Sentinel-1 / 2, MODIS) ✅
 
